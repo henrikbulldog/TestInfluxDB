@@ -5,6 +5,7 @@ using RestSharp;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -22,7 +23,26 @@ namespace TestInfluxDB
 
         static async Task MainAsync(string[] args)
         {
-            await WriteLineProtocolAsync();
+            var l = new List<ComputerInfo>
+            {
+                new ComputerInfo
+                {
+                    Timestamp = DateTime.UtcNow,
+                    CPU= 12.345,
+                    RAM = Process.GetCurrentProcess().WorkingSet64,
+                    Host= Environment.GetEnvironmentVariable("COMPUTERNAME"),
+                    Region="WEU"
+                },
+                new ComputerInfo
+                {
+                    Timestamp = DateTime.UtcNow.AddMilliseconds(1),
+                    CPU = 23.456,
+                    RAM = Process.GetCurrentProcess().WorkingSet64,
+                    Host = Environment.GetEnvironmentVariable("COMPUTERNAME"),
+                    Region = "WEU"
+                }
+            };
+            await WriteLineProtocolAsync(l, ci => ci.Timestamp);
             ReadRest();
             DeleteRest();
         }
@@ -41,49 +61,74 @@ namespace TestInfluxDB
             }
         }
 
-        private static async Task WriteLineProtocolAsync()
+        private static async Task WriteLineProtocolAsync<T>(
+            IEnumerable<T> l, 
+            Expression<Func<T, object>> timeProperty = null)
         {
             var payload = new LineProtocolPayload();
-            payload.Add(new LineProtocolPoint(
-                "ComputerInfo",
-                new Dictionary<string, object>
-                {
-                    { "CPU", 12.345 },
-                    { "RAM", Process.GetCurrentProcess().WorkingSet64 },
-                },
-                new Dictionary<string, string>
-                {
-                    { "Host", Environment.GetEnvironmentVariable("COMPUTERNAME") },
-                    { "Region", "WEU" }
-                },
-                DateTime.UtcNow));
-            Thread.Sleep(1);
-            payload.Add(new LineProtocolPoint(
-                "ComputerInfo",
-                new Dictionary<string, object>
-                {
-                    { "CPU", 23.455 },
-                    { "RAM", Process.GetCurrentProcess().WorkingSet64 },
-                },
-                new Dictionary<string, string>
-                {
-                    { "Host", Environment.GetEnvironmentVariable("COMPUTERNAME") },
-                    { "Region", "WEU" }
-                },
-                DateTime.UtcNow));
-
+            foreach (var t in l)
+            {
+                payload.Add(Object2LineProtocolPoint(t, timeProperty));
+            }
             var client = new LineProtocolClient(new Uri("http://localhost:8086"), "datahub");
             var influxResult = await client.WriteAsync(payload);
             Console.WriteLine($"Success: {influxResult.Success} {influxResult.ErrorMessage}");
         }
 
+        private static LineProtocolPoint Object2LineProtocolPoint<T>(
+            T t, 
+            Expression<Func<T, object>> timeProperty = null)
+        {
+            var fields = new Dictionary<string, object>();
+            var tags = new Dictionary<string, string>();
+            var ts = DateTime.Now;
+            foreach (var property in typeof(T).GetProperties())
+            {
+                if (property.Name == GetPropertyName<T>(timeProperty))
+                {
+                    ts = (DateTime)property.GetValue(t);
+                }
+                else if (property.PropertyType.IsValueType)
+                {
+                    fields.Add(property.Name, property.GetValue(t));
+                }
+                else
+                {
+                    tags.Add(property.Name, property.GetValue(t).ToString());
+                }
+            }
+
+            var p = new LineProtocolPoint(typeof(T).Name, fields, tags, ts);
+            return p;
+        }
+
+        private static string GetPropertyName<T>(Expression<Func<T, object>> propertyExpression)
+        {
+            if(propertyExpression == null)
+            {
+                return null;
+            }
+
+            var body = propertyExpression.Body as MemberExpression;
+
+            if (body != null)
+            {
+                return body.Member.Name;
+            }
+
+            var ubody = (UnaryExpression)propertyExpression.Body;
+            body = ubody.Operand as MemberExpression;
+
+            return body?.Member.Name ?? string.Empty;
+        }
+
         private static void ReadRest()
         {
-            var list = ReadRest<ComputerInfo>("Timestamp");
+            var list = ReadRest<ComputerInfo>(ci => ci.Timestamp);
             Console.WriteLine(JsonConvert.SerializeObject(list, Formatting.Indented));
         }
 
-        private static IEnumerable<T> ReadRest<T>(string timeProperty)
+        private static IEnumerable<T> ReadRest<T>(Expression<Func<T, object>> timeProperty = null)
             where T : class, new()
         {
             var readRequest = new RestRequest("query", Method.GET)
@@ -101,7 +146,10 @@ namespace TestInfluxDB
             return Deserialize<T>(serie.Columns, serie.Values, timeProperty);
         }
 
-        private static IEnumerable<T> Deserialize<T>(string[] columns, object[][] values, string timeProperty)
+        private static IEnumerable<T> Deserialize<T>(
+            string[] columns, 
+            object[][] values, 
+            Expression<Func<T, object>> timeProperty = null)
             where T : class, new()
         {
             var r = new List<T>();
@@ -113,7 +161,7 @@ namespace TestInfluxDB
                     PropertyInfo propertyInfo = t.GetType().GetProperty(columns[i]);
                     if (columns[i] == "time")
                     {
-                        propertyInfo = t.GetType().GetProperty(timeProperty);
+                        propertyInfo = t.GetType().GetProperty(GetPropertyName<T>(timeProperty));
                     }
                     if(propertyInfo != null)
                         propertyInfo.SetValue(t, Convert.ChangeType(value[i], propertyInfo.PropertyType), null);
