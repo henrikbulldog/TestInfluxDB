@@ -42,15 +42,19 @@ namespace TestInfluxDB
                     Region = "WEU"
                 }
             };
-            await WriteLineProtocolAsync(l, ci => ci.Timestamp);
-            ReadRest();
-            DeleteRest();
+
+            await Write(l, ci => ci.Timestamp);
+
+            var list = Read<ComputerInfo>(ci => ci.Timestamp);
+            Console.WriteLine(JsonConvert.SerializeObject(list, Formatting.Indented));
+
+            DeleteAll<ComputerInfo>();
         }
 
-        private static void DeleteRest()
+        private static void DeleteAll<T>()
         {
             var readRequest = new RestRequest("query", Method.POST)
-                .AddQueryParameter("q", "delete from ComputerInfo")
+                .AddQueryParameter("q", $"delete from {typeof(T).Name}")
                 .AddQueryParameter("db", "datahub");
             var client = new RestClient("http://localhost:8086");
             var r = client.Execute(readRequest);
@@ -61,7 +65,7 @@ namespace TestInfluxDB
             }
         }
 
-        private static async Task WriteLineProtocolAsync<T>(
+        private static async Task Write<T>(
             IEnumerable<T> l, 
             Expression<Func<T, object>> timeProperty = null)
         {
@@ -122,13 +126,7 @@ namespace TestInfluxDB
             return body?.Member.Name ?? string.Empty;
         }
 
-        private static void ReadRest()
-        {
-            var list = ReadRest<ComputerInfo>(ci => ci.Timestamp);
-            Console.WriteLine(JsonConvert.SerializeObject(list, Formatting.Indented));
-        }
-
-        private static IEnumerable<T> ReadRest<T>(Expression<Func<T, object>> timeProperty = null)
+        private static IEnumerable<T> Read<T>(Expression<Func<T, object>> timeProperty = null)
             where T : class, new()
         {
             var readRequest = new RestRequest("query", Method.GET)
