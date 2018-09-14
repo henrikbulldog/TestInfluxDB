@@ -43,9 +43,15 @@ namespace TestInfluxDB
                 }
             };
 
-            await Write(l, ci => ci.Timestamp);
+            var builder = new TimeSeriesBuilder<ComputerInfo>()
+                .SetTimestamp(ci => ci.Timestamp)
+                .AddField(ci => ci.Host)
+                .AddField(ci => ci.Region)
+                .AddTag(ci => ci.RAM)
+                .AddTag(ci => ci.CPU);
+            await Write(l, builder);
 
-            var list = Read<ComputerInfo>(ci => ci.Timestamp);
+            var list = Read<ComputerInfo>(builder.Timestamp);
             Console.WriteLine(JsonConvert.SerializeObject(list, Formatting.Indented));
 
             DeleteAll<ComputerInfo>();
@@ -67,12 +73,12 @@ namespace TestInfluxDB
 
         private static async Task Write<T>(
             IEnumerable<T> l, 
-            Expression<Func<T, object>> timeProperty = null)
+            TimeSeriesBuilder<T> builder)
         {
             var payload = new LineProtocolPayload();
             foreach (var t in l)
             {
-                payload.Add(Object2LineProtocolPoint(t, timeProperty));
+                payload.Add(Object2LineProtocolPoint(t, builder));
             }
             var client = new LineProtocolClient(new Uri("http://localhost:8086"), "datahub");
             var influxResult = await client.WriteAsync(payload);
@@ -80,53 +86,26 @@ namespace TestInfluxDB
         }
 
         private static LineProtocolPoint Object2LineProtocolPoint<T>(
-            T t, 
-            Expression<Func<T, object>> timeProperty = null)
+            T t,
+            TimeSeriesBuilder<T> builder = null)
         {
             var fields = new Dictionary<string, object>();
             var tags = new Dictionary<string, string>();
-            var ts = DateTime.Now;
-            foreach (var property in typeof(T).GetProperties())
+            var ts = (DateTime)typeof(T).GetProperty(builder.Timestamp).GetValue(t);
+            foreach (var field in builder.Fields)
             {
-                if (property.Name == GetPropertyName<T>(timeProperty))
-                {
-                    ts = (DateTime)property.GetValue(t);
-                }
-                else if (property.PropertyType.IsValueType)
-                {
-                    fields.Add(property.Name, property.GetValue(t));
-                }
-                else
-                {
-                    tags.Add(property.Name, property.GetValue(t).ToString());
-                }
+                fields.Add(field, typeof(T).GetProperty(field).GetValue(t));
+            }
+            foreach (var tag in builder.Tags)
+            {
+                fields.Add(tag, typeof(T).GetProperty(tag).GetValue(t));
             }
 
             var p = new LineProtocolPoint(typeof(T).Name, fields, tags, ts);
             return p;
         }
 
-        private static string GetPropertyName<T>(Expression<Func<T, object>> propertyExpression)
-        {
-            if(propertyExpression == null)
-            {
-                return null;
-            }
-
-            var body = propertyExpression.Body as MemberExpression;
-
-            if (body != null)
-            {
-                return body.Member.Name;
-            }
-
-            var ubody = (UnaryExpression)propertyExpression.Body;
-            body = ubody.Operand as MemberExpression;
-
-            return body?.Member.Name ?? string.Empty;
-        }
-
-        private static IEnumerable<T> Read<T>(Expression<Func<T, object>> timeProperty = null)
+        private static IEnumerable<T> Read<T>(string timeProperty)
             where T : class, new()
         {
             var readRequest = new RestRequest("query", Method.GET)
@@ -147,7 +126,7 @@ namespace TestInfluxDB
         private static IEnumerable<T> Deserialize<T>(
             string[] columns, 
             object[][] values, 
-            Expression<Func<T, object>> timeProperty = null)
+            string timeProperty = null)
             where T : class, new()
         {
             var r = new List<T>();
@@ -159,7 +138,7 @@ namespace TestInfluxDB
                     PropertyInfo propertyInfo = t.GetType().GetProperty(columns[i]);
                     if (columns[i] == "time")
                     {
-                        propertyInfo = t.GetType().GetProperty(GetPropertyName<T>(timeProperty));
+                        propertyInfo = t.GetType().GetProperty(timeProperty);
                     }
                     if(propertyInfo != null)
                         propertyInfo.SetValue(t, Convert.ChangeType(value[i], propertyInfo.PropertyType), null);
