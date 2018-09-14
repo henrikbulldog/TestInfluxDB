@@ -23,36 +23,46 @@ namespace TestInfluxDB
 
         static async Task MainAsync(string[] args)
         {
-            var l = new List<ComputerInfo>
+            Console.WriteLine("Writing ...");
+            var hostname = Environment.GetEnvironmentVariable("COMPUTERNAME");
+            var start = DateTime.UtcNow.AddMinutes(-3);
+            var ram = Process.GetCurrentProcess().WorkingSet64;
+            var l = new List<ComputerInfo>();
+            var r = new Random();
+            for (int i=0; i<200;i++)
             {
-                new ComputerInfo
+                l.Add(new ComputerInfo
                 {
-                    Timestamp = DateTime.UtcNow,
-                    CPU= 12.345,
-                    RAM = Process.GetCurrentProcess().WorkingSet64,
-                    Host= Environment.GetEnvironmentVariable("COMPUTERNAME"),
-                    Region="WEU"
-                },
-                new ComputerInfo
-                {
-                    Timestamp = DateTime.UtcNow.AddMilliseconds(1),
-                    CPU = 23.456,
-                    RAM = Process.GetCurrentProcess().WorkingSet64,
-                    Host = Environment.GetEnvironmentVariable("COMPUTERNAME"),
+                    Timestamp = start.AddSeconds(i),
+                    CPU = r.NextDouble(),
+                    RAM = ram,
+                    Host = hostname,
                     Region = "WEU"
-                }
+                });
             };
 
-            var builder = new TimeSeriesBuilder<ComputerInfo>()
-                .SetTimestamp(ci => ci.Timestamp)
+            var dataPointBuilder = new TimeseriesDataPointBuilder<ComputerInfo>(ci => ci.Timestamp)
                 .AddField(ci => ci.Host)
                 .AddField(ci => ci.Region)
                 .AddTag(ci => ci.RAM)
                 .AddTag(ci => ci.CPU);
-            await Write(l, builder);
+            await Write(l, dataPointBuilder);
 
-            var list = Read<ComputerInfo>(builder.Timestamp);
-            Console.WriteLine(JsonConvert.SerializeObject(list, Formatting.Indented));
+            var queryBuilder = new TimeseriesQueryBuilder<ComputerInfo>(ci => ci.Timestamp)
+                .SetWhere($"Host = '{hostname}'")
+                .SetFrom(DateTime.UtcNow.AddMinutes(-2))
+                .SetTo(DateTime.UtcNow)
+                .SetTimeInterval(TimeInterval.Minute)
+                .SetAggregationFunction(AggregationFunction.Mean);
+            Console.WriteLine(queryBuilder.GetQuery());
+            var list = Read(queryBuilder);
+            Console.WriteLine(JsonConvert.SerializeObject(
+                list, 
+                new JsonSerializerSettings
+                {
+                    Formatting =Formatting.Indented,
+                    NullValueHandling =NullValueHandling.Ignore
+                }));
 
             DeleteAll<ComputerInfo>();
         }
@@ -73,7 +83,7 @@ namespace TestInfluxDB
 
         private static async Task Write<T>(
             IEnumerable<T> l, 
-            TimeSeriesBuilder<T> builder)
+            TimeseriesDataPointBuilder<T> builder)
         {
             var payload = new LineProtocolPayload();
             foreach (var t in l)
@@ -87,7 +97,7 @@ namespace TestInfluxDB
 
         private static LineProtocolPoint Object2LineProtocolPoint<T>(
             T t,
-            TimeSeriesBuilder<T> builder = null)
+            TimeseriesDataPointBuilder<T> builder = null)
         {
             var fields = new Dictionary<string, object>();
             var tags = new Dictionary<string, string>();
@@ -105,11 +115,11 @@ namespace TestInfluxDB
             return p;
         }
 
-        private static IEnumerable<T> Read<T>(string timeProperty)
+        private static IEnumerable<T> Read<T>(TimeseriesQueryBuilder<T> builder)
             where T : class, new()
         {
             var readRequest = new RestRequest("query", Method.GET)
-                .AddQueryParameter("q", $"select * from {typeof(T).Name}")
+                .AddQueryParameter("q", builder.GetQuery())
                 .AddQueryParameter("db", "datahub");
             var client = new RestClient("http://localhost:8086");
             var r = client.Execute(readRequest);
@@ -119,8 +129,14 @@ namespace TestInfluxDB
             }
 
             var qr = JsonConvert.DeserializeObject<QueryResult>(r.Content);
+
+            if(!string.IsNullOrEmpty(qr.Results[0].Error))
+            {
+                throw new Exception(qr.Results[0].Error);
+            }
+
             var serie = qr.Results[0].Series[0];
-            return Deserialize<T>(serie.Columns, serie.Values, timeProperty);
+            return Deserialize<T>(serie.Columns, serie.Values, builder.Timestamp);
         }
 
         private static IEnumerable<T> Deserialize<T>(
@@ -140,7 +156,7 @@ namespace TestInfluxDB
                     {
                         propertyInfo = t.GetType().GetProperty(timeProperty);
                     }
-                    if(propertyInfo != null)
+                    if(propertyInfo != null && value.Length > i && value[i] != null)
                         propertyInfo.SetValue(t, Convert.ChangeType(value[i], propertyInfo.PropertyType), null);
                 }
                 r.Add(t);
