@@ -5,10 +5,7 @@ using RestSharp;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using TestInfluxDB.Models;
 
@@ -29,7 +26,7 @@ namespace TestInfluxDB
             var ram = Process.GetCurrentProcess().WorkingSet64;
             var l = new List<ComputerInfo>();
             var r = new Random();
-            for (int i=0; i<200;i++)
+            for (int i = 0; i < 200; i++)
             {
                 l.Add(new ComputerInfo
                 {
@@ -37,15 +34,15 @@ namespace TestInfluxDB
                     CPU = r.NextDouble(),
                     RAM = ram,
                     Host = hostname,
-                    Region = "WEU"
+                    Region = i % 2 == 0 ? "CUS" : "WEU"
                 });
             };
 
             var dataPointBuilder = new TimeseriesDataPointBuilder<ComputerInfo>(ci => ci.Timestamp)
-                .AddField(ci => ci.Host)
-                .AddField(ci => ci.Region)
-                .AddTag(ci => ci.RAM)
-                .AddTag(ci => ci.CPU);
+                .AddTag(ci => ci.Host)
+                .AddTag(ci => ci.Region)
+                .AddField(ci => ci.RAM)
+                .AddField(ci => ci.CPU);
             await Write(l, dataPointBuilder);
 
             var queryBuilder = new TimeseriesQueryBuilder<ComputerInfo>(ci => ci.Timestamp)
@@ -53,15 +50,16 @@ namespace TestInfluxDB
                 .SetFrom(DateTime.UtcNow.AddMinutes(-2))
                 .SetTo(DateTime.UtcNow)
                 .SetTimeInterval(TimeInterval.Minute)
+                .SetGroupby(ci => ci.Region)
                 .SetAggregationFunction(AggregationFunction.Mean);
             Console.WriteLine(queryBuilder.GetQuery());
             var list = Read(queryBuilder);
             Console.WriteLine(JsonConvert.SerializeObject(
-                list, 
+                list,
                 new JsonSerializerSettings
                 {
-                    Formatting =Formatting.Indented,
-                    NullValueHandling =NullValueHandling.Ignore
+                    Formatting = Formatting.Indented,
+                    NullValueHandling = NullValueHandling.Ignore
                 }));
 
             DeleteAll<ComputerInfo>();
@@ -82,7 +80,7 @@ namespace TestInfluxDB
         }
 
         private static async Task Write<T>(
-            IEnumerable<T> l, 
+            IEnumerable<T> l,
             TimeseriesDataPointBuilder<T> builder)
         {
             var payload = new LineProtocolPayload();
@@ -108,7 +106,7 @@ namespace TestInfluxDB
             }
             foreach (var tag in builder.Tags)
             {
-                fields.Add(tag, typeof(T).GetProperty(tag).GetValue(t));
+                tags.Add(tag, typeof(T).GetProperty(tag).GetValue(t).ToString());
             }
 
             var p = new LineProtocolPoint(typeof(T).Name, fields, tags, ts);
@@ -130,38 +128,65 @@ namespace TestInfluxDB
 
             var qr = JsonConvert.DeserializeObject<QueryResult>(r.Content);
 
-            if(!string.IsNullOrEmpty(qr.Results[0].Error))
+            if (!string.IsNullOrEmpty(qr.Results[0].Error))
             {
                 throw new Exception(qr.Results[0].Error);
             }
 
-            var serie = qr.Results[0].Series[0];
-            return Deserialize<T>(serie.Columns, serie.Values, builder.Timestamp);
+            return Deserialize<T>(qr.Results[0], builder.Timestamp, builder.Groupby);
         }
 
         private static IEnumerable<T> Deserialize<T>(
-            string[] columns, 
-            object[][] values, 
-            string timeProperty = null)
+            Result result,
+            string timeProperty,
+            string groupByProperty = null)
             where T : class, new()
         {
+            if (result == null || result.Series == null)
+                return null;
             var r = new List<T>();
-            foreach(var value in values)
+            foreach (var serie in result.Series)
             {
-                var t = new T();
-                for (int i=0; i<columns.Length; i++)
+                foreach (var value in serie.Values)
                 {
-                    PropertyInfo propertyInfo = t.GetType().GetProperty(columns[i]);
-                    if (columns[i] == "time")
+                    var t = new T();
+                    AddGroups(t, serie, groupByProperty);
+                    for (int i = 0; i < serie.Columns.Length; i++)
                     {
-                        propertyInfo = t.GetType().GetProperty(timeProperty);
+                        PropertyInfo propertyInfo = t.GetType().GetProperty(serie.Columns[i]);
+                        if (serie.Columns[i] == "time")
+                        {
+                            propertyInfo = t.GetType().GetProperty(timeProperty);
+                        }
+                        if (propertyInfo != null && serie.Columns.Length > i && value[i] != null)
+                        {
+                            propertyInfo.SetValue(t, Convert.ChangeType(value[i], propertyInfo.PropertyType), null);
+                        }
                     }
-                    if(propertyInfo != null && value.Length > i && value[i] != null)
-                        propertyInfo.SetValue(t, Convert.ChangeType(value[i], propertyInfo.PropertyType), null);
+
+                    r.Add(t);
                 }
-                r.Add(t);
             }
+
             return r;
+        }
+
+        private static void AddGroups<T>(
+            T t, 
+            Serie serie,
+            string groupByProperty) 
+            where T : class, new()
+        {
+            if(string.IsNullOrEmpty(groupByProperty))
+            {
+                return;
+            }
+
+            if(serie.Tags.ContainsKey(groupByProperty))
+            {
+                PropertyInfo propertyInfo = t.GetType().GetProperty(groupByProperty);
+                    propertyInfo.SetValue(t, Convert.ChangeType(serie.Tags[groupByProperty], propertyInfo.PropertyType), null);
+            }
         }
     }
 }

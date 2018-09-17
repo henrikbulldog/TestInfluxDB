@@ -1,8 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Text;
 
 namespace TestInfluxDB
 {
@@ -13,10 +11,17 @@ namespace TestInfluxDB
         public DateTime To { get; private set; } = DateTime.MaxValue;
         public TimeInterval TimeInterval { get; private set; } = TimeInterval.Raw;
         public AggregationFunction AggregationFunction { get; private set; } = AggregationFunction.Mean;
+        public string Groupby { get; private set; }
 
         public TimeseriesQueryBuilder(Expression<Func<T, object>> timestampExpression)
             : base(timestampExpression)
         {
+        }
+
+        public TimeseriesQueryBuilder<T> SetGroupby(Expression<Func<T, object>> groupByExpression)
+        {
+            Groupby = ExpressionHelper.GetPropertyName(groupByExpression);
+            return this;
         }
 
         public TimeseriesQueryBuilder<T> SetFrom(DateTime from)
@@ -54,9 +59,13 @@ namespace TestInfluxDB
             string interval = GetTimeIntervalAsString();
             var isAggregate = !string.IsNullOrEmpty(interval);
             string groupBy = "";
-            if(!string.IsNullOrEmpty(interval))
+            if (!string.IsNullOrEmpty(interval))
             {
                 groupBy = $" group by time(1{interval})";
+            }
+            if (!string.IsNullOrEmpty(groupBy))
+            {
+                groupBy += $", {Groupby}";
             }
 
             return $"select {GetSelect(isAggregate)} from {typeof(T).Name}{GetWhere()}{groupBy}";
