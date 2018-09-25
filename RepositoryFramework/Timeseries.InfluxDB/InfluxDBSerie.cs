@@ -1,19 +1,17 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using System.Collections.Generic;
 
-namespace TestInfluxDB.Models
+namespace RepositoryFramework.Timeseries.InfluxDB
 {
-    public class Serie
+    internal class InfluxDBSerie
     {
-        public Serie()
+        public InfluxDBSerie()
         {
             Tags = new Dictionary<string, string>();
             Columns = new string[] { };
             Values = new object[][] { };
         }
 
-        private Serie(string name)
+        private InfluxDBSerie(string name)
         {
             Name = name;
         }

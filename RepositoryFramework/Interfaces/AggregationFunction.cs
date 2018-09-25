@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace TestInfluxDB
+namespace RepositoryFramework.Interfaces
 {
     public enum AggregationFunction
     {
