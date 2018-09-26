@@ -36,7 +36,7 @@ namespace TestInfluxDB
             {
                 foreach (var source in sources)
                 {
-                    var timeseriesData = new Timeseries
+                    var timeseriesData = new TimeseriesData
                     {
                         Tag = tag,
                         Source = source,
@@ -54,16 +54,16 @@ namespace TestInfluxDB
                 }
             }
 
-            Console.WriteLine("Raw data filtered by tags [RAM, CPU], Source CUS, and time now - 10 mins until now");
+            Console.WriteLine("Raw data filtered by tags [RAM, CPU], Source CUS and time");
             Console.WriteLine(JsonConvert.SerializeObject(
-                await repo.FindAsync(new List<string> { "RAM", "CPU" }, "CUS", start, DateTime.UtcNow),
+                await repo.FindAsync(new List<string> { "RAM", "CPU" }, "CUS", start, start.AddMinutes(2)),
                 new JsonSerializerSettings
                 {
                     Formatting = Formatting.Indented,
                     NullValueHandling = NullValueHandling.Ignore
                 }));
 
-            Console.WriteLine("Aggregated data by 1 minute:");
+            Console.WriteLine("Aggregated data filtered by tags [RAM, CPU], Source CUS and time, 1 minute interval:");
             var findResult = await repo.FindAggregateAsync(
                 new List<string> { "RAM", "CPU" }, 
                 TimeInterval.Minute,
@@ -72,7 +72,10 @@ namespace TestInfluxDB
                     AggregationFunction.Count,
                     AggregationFunction.Mean,
                     AggregationFunction.Spread
-                });
+                },
+                "CUS",
+                start, 
+                start.AddMinutes(2));
             Console.WriteLine(JsonConvert.SerializeObject(
                 findResult,
                 new JsonSerializerSettings

@@ -24,12 +24,12 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             this.measurement = measurement;
         }
 
-        public void Create(Interfaces.Timeseries data)
+        public void Create(Interfaces.TimeseriesData data)
         {
             CreateAsync(data).WaitSync();
         }
 
-        public async Task CreateAsync(Interfaces.Timeseries timeseries)
+        public async Task CreateAsync(Interfaces.TimeseriesData timeseries)
         {
             if (timeseries == null || timeseries.DataPoints == null)
             {
@@ -53,14 +53,14 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             }
         }
 
-        public IEnumerable<Interfaces.Timeseries> Find(IList<string> tags, string source = null, DateTime? from = null, DateTime? to = null)
+        public IEnumerable<Interfaces.TimeseriesData> Find(IList<string> tags, string source = null, DateTime? from = null, DateTime? to = null)
         {
             var task = FindAsync(tags, source, from, to);
             task.WaitSync();
             return task.Result;
         }
 
-        public async Task<IEnumerable<Interfaces.Timeseries>> FindAsync(IList<string> tags, string source = null, DateTime? from = null, DateTime? to = null)
+        public async Task<IEnumerable<Interfaces.TimeseriesData>> FindAsync(IList<string> tags, string source = null, DateTime? from = null, DateTime? to = null)
         {
             var where = "";
             if (source != null)
@@ -113,12 +113,12 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             }
         }
 
-        public IEnumerable<AggregationTimeseriesData> FindAggregate(IList<string> tags, TimeInterval timeInterval, IList<AggregationFunction> aggregationFunctions = null, string source = null, DateTime? from = null, DateTime? to = null)
+        public IEnumerable<TimeseriesData> FindAggregate(IList<string> tags, TimeInterval timeInterval, IList<AggregationFunction> aggregationFunctions = null, string source = null, DateTime? from = null, DateTime? to = null)
         {
             throw new NotImplementedException();
         }
 
-        public async Task<IEnumerable<AggregationTimeseriesData>> FindAggregateAsync(
+        public async Task<IEnumerable<TimeseriesData>> FindAggregateAsync(
             IList<string> tags,
             TimeInterval timeInterval, IList<AggregationFunction> aggregationFunctions = null,
             string source = null,
@@ -146,11 +146,10 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             AddTagsFilter(tags, where);
 
             string interval = GetTimeIntervalAsString(timeInterval);
-            var isAggregate = !string.IsNullOrEmpty(interval);
-            string groupBy = " group by \"Tag\", \"Source\"";
-            if (!string.IsNullOrEmpty(interval))
+            string groupBy = "group by \"Tag\", \"Source\"";
+            if(!string.IsNullOrEmpty(interval))
             {
-                groupBy += $", time(1{interval})";
+                groupBy += $" , time(1{interval})";
             }
 
             var sql = $"select {AggregationFunctionsAsSQL(aggregationFunctions)} from {measurement}{where}{groupBy}";
@@ -172,34 +171,40 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             return AggregationDeserialize(qr.Results[0]);
         }
 
-        private IEnumerable<AggregationTimeseriesData> AggregationDeserialize(InfluxDBResult result)
+        private IEnumerable<TimeseriesData> AggregationDeserialize(InfluxDBResult result)
         {
             if (result == null || result.Series == null)
                 return null;
-            var r = new List<AggregationTimeseriesData>();
+            var r = new List<TimeseriesData>();
             foreach (var serie in result.Series)
             {
-                r.Add(new AggregationTimeseriesData
+                r.Add(new TimeseriesData
                 {
                     Tag = serie.Tags["Tag"],
                     Source = serie.Tags["Source"],
                     DataPoints = serie.Values
                         .Select(v =>
                         {
+                            var point = new DataPoint
+                            {
+                                Value = new ExpandoObject()
+                            };
                             dynamic ex = new ExpandoObject();
-                            for (var i=0;i<serie.Columns.Length;i++)
+                            for (var i = 0; i < serie.Columns.Length; i++)
                             {
                                 if (serie.Columns[i] == "time")
                                 {
+                                    point.Timestamp = (DateTime)v[i];
                                     (ex as IDictionary<string, Object>).Add("Timestamp", v[i]);
                                 }
                                 else
                                 {
+                                    (point.Value as IDictionary<string, Object>).Add(serie.Columns[i], v[i]);
                                     (ex as IDictionary<string, Object>).Add(serie.Columns[i], v[i]);
                                 }
                             }
-                            return ex;
-                        })
+                            return point;
+                        }).ToList()
                 });
             }
 
@@ -264,12 +269,12 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             return taskCompletionSource.Task;
         }
 
-        private static IEnumerable<Interfaces.Timeseries> Deserialize(
+        private static IEnumerable<Interfaces.TimeseriesData> Deserialize(
             InfluxDBResult result)
         {
             if (result == null || result.Series == null)
                 return null;
-            var r = new List<Interfaces.Timeseries>();
+            var r = new List<Interfaces.TimeseriesData>();
             foreach (var serie in result.Series)
             {
                 var tagColumn = Array.FindIndex(serie.Columns, c => c == "Tag");
@@ -282,7 +287,7 @@ namespace RepositoryFramework.Timeseries.InfluxDB
                     Source = v.ElementAt(sourceColumn).ToString(),
                     Tag = v.ElementAt(tagColumn).ToString()
                 })
-                .Select(g => new Interfaces.Timeseries
+                .Select(g => new Interfaces.TimeseriesData
                 {
                     Tag = g.Key.Tag,
                     Source = g.Key.Source,

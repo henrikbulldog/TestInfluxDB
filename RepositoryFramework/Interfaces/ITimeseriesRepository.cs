@@ -5,29 +5,29 @@ using System.Threading.Tasks;
 
 namespace RepositoryFramework.Interfaces
 {
-    public interface ITimeseriesRepository : ICreate<Timeseries>, ICreateAsync<Timeseries>
+    public interface ITimeseriesRepository : ICreate<TimeseriesData>, ICreateAsync<TimeseriesData>
     {
-        IEnumerable<Timeseries> Find(
+        IEnumerable<TimeseriesData> Find(
             IList<string> tags,
             string source = null,
             DateTime? from = null,
             DateTime? to = null);
 
-        Task<IEnumerable<Timeseries>> FindAsync(
+        Task<IEnumerable<TimeseriesData>> FindAsync(
             IList<string> tags,
             string source = null,
             DateTime? from = null,
             DateTime? to = null);
 
-        IEnumerable<AggregationTimeseriesData> FindAggregate(
+        IEnumerable<TimeseriesData> FindAggregate(
             IList<string> tags,
-            TimeInterval timeInterval,
+            TimeInterval timeInterval = TimeInterval.Raw,
             IList<AggregationFunction> aggregationFunctions = null,
             string source = null,
             DateTime? from = null,
             DateTime? to = null);
 
-        Task<IEnumerable<AggregationTimeseriesData>> FindAggregateAsync(
+        Task<IEnumerable<TimeseriesData>> FindAggregateAsync(
             IList<string> tags,
             TimeInterval timeInterval,
             IList<AggregationFunction> aggregationFunctions = null,

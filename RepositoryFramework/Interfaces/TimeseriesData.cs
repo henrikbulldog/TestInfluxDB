@@ -4,7 +4,7 @@ using System.Text;
 
 namespace RepositoryFramework.Interfaces
 {
-    public class Timeseries
+    public class TimeseriesData
     {
         public string Tag { get; set; }
 
