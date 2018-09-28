@@ -29,9 +29,10 @@ namespace TestInfluxDB
             var ram = Process.GetCurrentProcess().WorkingSet64;
             var r = new Random();
 
-            var repo = new InfluxDBRepository(new Uri("http://localhost:8086"), "datahub", "ComputerInfo");
+            var repo = new InfluxDBRepository("http://localhost:8086", "datahub", "ComputerInfo");
             var sources = new List<string>() { "CUS", "WEU" };
             var tags = new List<string>() { "CPU", "RAM" };
+            var time = DateTime.Now;
             foreach (var tag in tags)
             {
                 foreach (var source in sources)
@@ -42,17 +43,20 @@ namespace TestInfluxDB
                         Source = source,
                         DataPoints = new List<DataPoint>()
                     };
-                    for (int i = 0; i < 3; i++)
+                    for (int i = 0; i < 10; i++)
                     {
                         timeseriesData.DataPoints.Add(new DataPoint
                         {
-                            Timestamp = start.AddSeconds(i*30),
+                            Timestamp = start.AddSeconds(i*10),
                             Value = tag.Contains("CPU") ? r.NextDouble() : ram
                         });
                     }
-                    await repo.CreateAsync(timeseriesData);
+                    repo.Create(timeseriesData);
                 }
             }
+
+            Console.WriteLine($"Time: {DateTime.Now - time}");
+            repo.Flush();
 
             Console.WriteLine("Raw data filtered by tags [RAM, CPU], Source CUS and time");
             Console.WriteLine(JsonConvert.SerializeObject(
@@ -65,7 +69,7 @@ namespace TestInfluxDB
 
             Console.WriteLine("Aggregated data filtered by tags [RAM, CPU], Source CUS and time, 1 minute interval:");
             var findResult = await repo.FindAggregateAsync(
-                new List<string> { "RAM", "CPU" }, 
+                new List<string> { "RAM", "CPU" },
                 TimeInterval.Minute,
                 new List<AggregationFunction>
                 {
@@ -74,7 +78,7 @@ namespace TestInfluxDB
                     AggregationFunction.Spread
                 },
                 "CUS",
-                start, 
+                start,
                 start.AddMinutes(2));
             Console.WriteLine(JsonConvert.SerializeObject(
                 findResult,

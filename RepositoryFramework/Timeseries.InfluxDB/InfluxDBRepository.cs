@@ -1,56 +1,82 @@
-﻿using InfluxDB.LineProtocol.Client;
+﻿using InfluxDB.Collector;
+using InfluxDB.Collector.Diagnostics;
+using InfluxDB.LineProtocol.Client;
 using InfluxDB.LineProtocol.Payload;
 using Newtonsoft.Json;
 using RepositoryFramework.Interfaces;
 using RestSharp;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Dynamic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RepositoryFramework.Timeseries.InfluxDB
 {
-    public class InfluxDBRepository : ITimeseriesRepository
+    public class InfluxDBRepository : ITimeseriesRepository, IDisposable
     {
-        private Uri uri;
+        private string uri;
         private string database;
         private string measurement;
+        private MetricsCollector metricsCollector = null;
 
-        public InfluxDBRepository(Uri uri, string database, string measurement)
+        private MetricsCollector MetricsCollector
+        {
+            get
+            {
+                if(metricsCollector == null)
+                {
+                    metricsCollector = Metrics.Collector = new CollectorConfiguration()
+                        .Batch.AtInterval(TimeSpan.FromSeconds(2))
+                        .WriteTo.InfluxDB(uri, database)
+                        .CreateCollector();
+                }
+                return metricsCollector;
+            }
+        }
+
+        public InfluxDBRepository(string uri, string database, string measurement)
         {
             this.uri = uri;
             this.database = database;
             this.measurement = measurement;
+            CollectorLog.RegisterErrorHandler((message, exception) =>
+            {
+                throw new Exception(message, exception);
+            });
         }
 
         public void Create(Interfaces.TimeseriesData data)
         {
-            CreateAsync(data).WaitSync();
-        }
-
-        public async Task CreateAsync(Interfaces.TimeseriesData timeseries)
-        {
-            if (timeseries == null || timeseries.DataPoints == null)
+            if (data == null || data.DataPoints == null)
             {
                 return;
             }
-            var payload = new LineProtocolPayload();
-            foreach (var point in timeseries.DataPoints)
+
+            foreach (var point in data.DataPoints)
             {
                 var fields = new Dictionary<string, object>();
                 fields.Add("Value", point.Value);
                 var tags = new Dictionary<string, string>();
-                tags.Add("Tag", timeseries.Tag);
-                tags.Add("Source", timeseries.Source);
-                payload.Add(new LineProtocolPoint(measurement, fields, tags, point.Timestamp));
+                tags.Add("Tag", data.Tag);
+                tags.Add("Source", data.Source);
+                MetricsCollector.Write(measurement, fields, tags, point.Timestamp);
             }
-            var client = new LineProtocolClient(uri, database);
-            var influxResult = await client.WriteAsync(payload);
-            if (!influxResult.Success)
+        }
+
+        public void Flush()
+        {
+            if (metricsCollector != null)
             {
-                new Exception(influxResult.ErrorMessage);
+                metricsCollector.Dispose();
             }
+        }
+
+        public async Task CreateAsync(Interfaces.TimeseriesData data)
+        {
+            await Task.Run(() => Create(data));
         }
 
         public IEnumerable<Interfaces.TimeseriesData> Find(IList<string> tags, string source = null, DateTime? from = null, DateTime? to = null)
@@ -300,6 +326,11 @@ namespace RepositoryFramework.Timeseries.InfluxDB
             }
 
             return r;
+        }
+
+        public void Dispose()
+        {
+            Flush();
         }
     }
 }
